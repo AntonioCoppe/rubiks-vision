@@ -15,19 +15,19 @@ type CubeStore = {
   setSolution: (moves: string[]) => void;
 };
 
-export const useCubeStore = create<CubeStore>((set) => ({
+export const useCubeStore = create((set: any) => ({
   centers: {},
   faces: {},
   solution: [],
-  setCenter: (face, hsv, color) =>
-    set((state) => ({
+  setCenter: (face: Face, hsv: HSVVector, color: Color) =>
+    set((state: any) => ({
       centers: { ...state.centers, [face]: { ...hsv, color } },
     })),
-  setFace: (face, stickers /*, confidence*/) =>
-    set((state) => ({
+  setFace: (face: Face, stickers: Color[] /*, confidence: number*/) =>
+    set((state: any) => ({
       faces: { ...state.faces, [face]: stickers },
     })),
   reset: () => set({ centers: {}, faces: {}, solution: [] }),
-  setSolution: (moves) => set({ solution: moves }),
+  setSolution: (moves: string[]) => set({ solution: moves }),
 }));
 

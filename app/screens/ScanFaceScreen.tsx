@@ -1,37 +1,58 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { StyleSheet, View, Text, Pressable, Alert } from 'react-native';
-import { Camera, useCameraDevice, useCameraPermission } from 'react-native-vision-camera';
+import Camera from '../components/Camera';
+import { useCameraDevice, useCameraPermission } from 'react-native-vision-camera';
 import CameraGridOverlay, { GRID_SIZE } from '../components/CameraGridOverlay';
 import { HSV, medianHSV, classifyByCenters, RGB } from '../lib/color';
+import PixelColor from 'react-native-pixel-color';
 import { useCubeStore } from '../store/cubeStore';
 import { Face, Color } from '../../types/cube';
 
-// TODO: Replace with actual pixel loader implementation
-async function loadPixels(_path: string): Promise<{ data: Uint8Array; width: number; height: number }> {
-  Alert.alert(
-    'Not Implemented',
-    'Pixel loading is not implemented in this MVP. Replace loadPixels with a real implementation.'
-  );
-  return { data: new Uint8Array(), width: 0, height: 0 };
+// Convert hex (#RRGGBB or #AARRGGBB) to RGB
+function hexToRgb(hex: string): { r: number; g: number; b: number } {
+  if (hex.startsWith('#')) hex = hex.slice(1);
+  if (hex.length === 8) hex = hex.slice(2); // drop alpha if present
+  const num = parseInt(hex, 16);
+  return { r: (num >> 16) & 0xff, g: (num >> 8) & 0xff, b: num & 0xff };
 }
 
-// TODO: Replace with heuristic or UI picker
-function guessCenterColor(_hsv: HSV): Color {
-  // naive guess
-  return 'W';
+// Sample a small square of pixels around a center point and return RGB values.
+async function samplePatchColors(
+  uri: string,
+  width: number,
+  height: number,
+  cx: number,
+  cy: number,
+  pad: number
+): Promise<RGB[]> {
+  const pixels: RGB[] = [];
+  const step = Math.max(1, Math.floor(pad / 3)); // sparse sampling
+  for (let y = cy - pad; y <= cy + pad; y += step) {
+    for (let x = cx - pad; x <= cx + pad; x += step) {
+      if (x < 0 || y < 0 || x >= width || y >= height) continue;
+      try {
+        // PixelColor.getHex returns a HEX string (#RRGGBB)
+        const hex = await (PixelColor as any).getHex(uri, { x, y, width, height });
+        const { r, g, b } = hexToRgb(hex as string);
+        pixels.push({ r, g, b });
+      } catch {
+        // ignore sampling errors
+      }
+    }
+  }
+  return pixels;
 }
+
 
 type Props = { route: { params: { face: Face } }; navigation: any };
 
 export default function ScanFaceScreen({ route, navigation }: Props) {
   const face = route.params.face;
-  const camera = useRef<Camera>(null);
+  const camera = useRef(null);
   const device = useCameraDevice('back');
   const { hasPermission, requestPermission } = useCameraPermission();
   const [previewReady, setPreviewReady] = useState(false);
-  const centers = useCubeStore((s) => s.centers);
-  const setFace = useCubeStore((s) => s.setFace);
-  const setCenter = useCubeStore((s) => s.setCenter);
+  const { centers, setFace, setCenter } = useCubeStore();
 
   useEffect(() => {
     if (!hasPermission) requestPermission();
@@ -41,10 +62,10 @@ export default function ScanFaceScreen({ route, navigation }: Props) {
     if (!camera.current) return;
     const photo = await camera.current.takePhoto({ qualityPrioritization: 'speed' });
 
-    // NOTE: loadPixels needs a real implementation for production use
-    const { data, width, height } = await loadPixels(photo.path);
+    const { path, width, height } = photo as unknown as { path: string; width: number; height: number };
 
-    if (!data.length) {
+    if (!width || !height) {
+      Alert.alert('Error', 'Unable to determine image size.');
       return;
     }
 
@@ -56,30 +77,24 @@ export default function ScanFaceScreen({ route, navigation }: Props) {
       for (let col = 0; col < 3; col++) {
         const cx = Math.floor(col * cell + cell / 2);
         const cy = Math.floor(row * cell + cell / 2);
-        const rgbPatch: RGB[] = [];
-        for (let y = cy - pad; y <= cy + pad; y++) {
-          for (let x = cx - pad; x <= cx + pad; x++) {
-            const idx = (y * width + x) * 4;
-            rgbPatch.push({ r: data[idx], g: data[idx + 1], b: data[idx + 2] });
-          }
-        }
+        const rgbPatch = await samplePatchColors(path, width, height, cx, cy, pad);
         patches.push(rgbPatch);
       }
     }
 
     const hsvs: HSV[] = patches.map(medianHSV);
 
-    // First time we see a face, capture its center sticker as calibration if missing:
+    // If we don't know this face's center yet, ask the user to pick it.
     if (!centers[face]) {
-      const guessed: Color = guessCenterColor(hsvs[4]);
-      setCenter(face, hsvs[4], guessed);
+      navigation.navigate('CenterPicker', { face, centerHSV: hsvs[4] });
+      return;
     }
 
-    const centerArray = Object.values(centers).map((c) => ({
-      h: c!.h,
-      s: c!.s,
-      v: c!.v,
-      color: c!.color,
+    const centerArray = (Object.values(centers).filter(Boolean) as Array<{ h: number; s: number; v: number; color: Color }>).map((c) => ({
+      h: c.h,
+      s: c.s,
+      v: c.v,
+      color: c.color,
     }));
 
     const stickers: Color[] = hsvs.map((h) => classifyByCenters(h, centerArray));
@@ -98,8 +113,8 @@ export default function ScanFaceScreen({ route, navigation }: Props) {
     });
     const conf = Math.max(0, 1 - dists.reduce((a, b) => a + b, 0) / dists.length);
 
-    setFace(face, stickers, conf);
-    navigation.navigate('ReviewFaces');
+    setFace(face, stickers);
+    navigation.navigate('Review');
   }, [camera, centers, face, setCenter, setFace, navigation]);
 
   if (!device || !hasPermission) {
