@@ -1,0 +1,4 @@
+$(PODS_ROOT)/Target Support Files/Pods-$(PRODUCT_NAME:rfc1034identifier)/expo-configure-project.sh
+$(PROJECT_DIR)/../app.json
+$(PROJECT_DIR)/../package.json
+$(PROJECT_DIR)/Podfile.lock
